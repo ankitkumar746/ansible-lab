@@ -3,7 +3,7 @@
   command:
     cmd: >
       mv /etc/apt/sources.list.d/{{ item }}
-      /etc/apt/sources.list.d/{{ item }}
+      /etc/apt/sources.list.d/{{ item }}.disabled
   args:
     removes: /etc/apt/sources.list.d/pve-enterprise.sources
     creates: /etc/apt/sources.list.d/{{ item }}
