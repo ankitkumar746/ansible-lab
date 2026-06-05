@@ -1,0 +1,8 @@
+ctrl_interface=/run/wpa_supplicant
+update_config=1
+country=IN
+
+network={
+    ssid="{{ wifi_ssid }}"
+    psk={{ wifi_psk_hash }}
+}
