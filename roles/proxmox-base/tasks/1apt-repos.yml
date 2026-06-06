@@ -1,0 +1,46 @@
+---
+- name: Disable enterprise repos
+  command:
+    cmd: >
+      mv /etc/apt/sources.list.d/{{ item }}
+      /etc/apt/sources.list.d/{{ item }}.disabled
+  args:
+    removes: /etc/apt/sources.list.d/pve-enterprise.sources
+    creates: /etc/apt/sources.list.d/{{ item }}
+  loop:
+    - pve-enterprise.sources
+    - ceph.sources
+
+- name: Configure Debian main repositories
+  deb822_repository:
+    name: "{{ item.name }}"
+    types: "{{ item.types }}"
+    uris: "{{ item.uris }}"
+    suites: "{{ item.suites }}"
+    components: "{{ item.components }}"
+    signed_by: "{{ item.signed_by }}"
+    state: present
+    enabled: true
+  loop:
+    - name: debian
+      types: deb
+      uris: http://deb.debian.org/debian/
+      suites: [trixie, trixie-updates]
+      components: [main, contrib, non-free-firmware]
+      signed_by: /usr/share/keyrings/debian-archive-keyring.gpg
+    - name: debian-security
+      types: deb
+      uris: http://security.debian.org/debian-security/
+      suites: [trixie-security]
+      components: [main, contrib, non-free-firmware]
+      signed_by: /usr/share/keyrings/debian-archive-keyring.gpg
+    - name: pve-no-subscription
+      types: deb
+      uris: http://download.proxmox.com/debian/pve
+      suites: trixie
+      components: pve-no-subscription
+      signed_by: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+- name: Update apt cache
+  apt:
+    update_cache: true

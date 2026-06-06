@@ -1,0 +1,23 @@
+#SPDX-License-Identifier: MIT-0
+---
+# handlers file for proxmox-base
+
+- name: Restart wpa_supplicant
+  systemd_service:
+    name: wpa_supplicant.service
+    state: restarted
+    enabled: true
+
+- name: Restart wpa_supplicant@interface
+  systemd_service:
+    name: "wpa_supplicant@{{ wifi_interface }}.service"
+    state: restarted
+    enabled: true
+
+- name: Restart dhcpcd
+  systemd_service:
+    name: dhcpcd.service
+    state: restarted
+    enabled: true
+
+

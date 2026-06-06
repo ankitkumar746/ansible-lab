@@ -1,0 +1,138 @@
+---
+# Step 1: Update apt cache and install required packages
+- name: Update apt cache and install wifi/network packages
+  ansible.builtin.apt:
+    name:
+      - wpasupplicant
+      - iw
+      - dhcpcd5
+      - vim
+    state: present
+    update_cache: true
+
+# Step 2a: Validate that the wifi interface exists on the host
+- name: Gather facts about network interfaces
+  setup:
+    gather_subset:
+      - network
+
+- name: Validate wifi interface exists
+  assert:
+    that:
+      - wifi_interface in ansible_facts.interfaces
+    fail_msg: >-
+      The provided wifi interface '{{ wifi_interface }}' was not found on this host.
+      Available interfaces: {{ ansible_facts.interfaces | join(', ') }}
+    quiet: true
+
+# Step 2b: Generate the PSK hash from the plaintext passphrase
+- name: Generate WPA PSK hash
+  command:
+    cmd: wpa_passphrase "{{ wifi_ssid }}" "{{ wifi_psk }}"
+  register: wpa_passphrase_output
+  changed_when: false
+  check_mode: no 
+  no_log: true  # avoid logging the passphrase in plaintext
+
+- name: Extract psk hash from wpa_passphrase output
+  set_fact:
+    wifi_psk_hash: >-
+      {{ wpa_passphrase_output.stdout_lines
+         | select('match', '^\s+psk=[0-9a-f]{64}')
+         | first
+         | regex_replace('^\s+psk=', '') | trim }}  
+  no_log: true  # avoid logging the PSK hash
+
+# Step 2c: Deploy wpa_supplicant config for the interface
+- name: Deploy wpa_supplicant configuration
+  template:
+    dest: "/etc/wpa_supplicant/wpa_supplicant-{{ wifi_interface }}.conf"
+    src: wpa_supplicant.conf.j2
+    owner: root
+    group: root
+    mode: "0600"
+  notify:
+    - Restart wpa_supplicant
+    - Restart wpa_supplicant@interface
+    - Restart dhcpcd
+
+# Step 3: Ensure services are enabled and started
+- name: Enable and start wpa_supplicant.service
+  systemd_service:
+    name: wpa_supplicant.service
+    state: started
+    enabled: true
+
+- name: Enable and start wpa_supplicant@interface
+  ansible.builtin.systemd_service:
+    name: "wpa_supplicant@{{ wifi_interface }}.service"
+    state: started
+    enabled: true
+
+- name: Enable and start dhcpcd.service
+  systemd_service:
+    name: dhcpcd.service
+    state: started
+    enabled: true
+
+# Step 4: Verify connectivity
+- name: Verify wifi interface has an IP address
+  assert:
+    that:
+      - ansible_facts[wifi_interface].ipv4.address is defined
+    fail_msg: >-
+      Interface '{{ wifi_interface }}' does not have an IPv4 address assigned.
+    quiet: true
+
+- name: Read DNS configuration from resolv.conf
+  slurp:
+    src: /etc/resolv.conf
+  register: resolv_conf_file
+  # ignore_errors: true
+
+- name: Extract configured nameservers
+  ansible.builtin.set_fact:
+    dns_servers: >-
+      {{
+        (resolv_conf_file.content | b64decode).splitlines()
+        | select('match', '^nameserver')
+        | map('regex_replace', '^nameserver\\s+', '')
+        | list
+      }}
+
+- name: Verify at least one DNS server configured
+  ansible.builtin.assert:
+    that:
+      - dns_servers | length > 0
+    fail_msg: "No nameservers configured in /etc/resolv.conf"
+    success_msg: "DNS servers found: {{ dns_servers | join(', ') }}"
+
+- name: Verify DNS resolution works
+  ansible.builtin.command:
+    argv:
+      - getent
+      - hosts
+      - google.com
+  register: dns_lookup
+  check_mode: no 
+  changed_when: false
+
+- name: Test internet connectivity
+  wait_for:
+    host: 8.8.8.8
+    port: 53
+    timeout: 5
+    delay: 1
+  register: connectivity_test
+  check_mode: no 
+  ignore_errors: true
+
+- name: Display connectivity report
+  ansible.builtin.debug:
+    msg:
+      - "=== Network Connectivity Report ==="
+      - "Interface             : {{ wifi_interface }}"
+      - "IP Address            : {{ ansible_facts[wifi_interface].ipv4.address | default('N/A') }}"
+      - "DNS Servers           : {{ dns_servers | join(', ') if dns_servers else 'None configured' }}"
+      - "DNS Resolution        : {{ 'SUCCESS' if dns_lookup.rc == 0 else 'FAILED' }}"
+      - "Internet Connectivity : {{ 'SUCCESS (8.8.8.8:53 reachable)' if connectivity_test is succeeded else 'FAILED' }}"

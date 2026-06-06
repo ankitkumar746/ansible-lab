@@ -1,0 +1,9 @@
+#SPDX-License-Identifier: MIT-0
+---
+# defaults file for proxmox-base
+
+wifi_interface: wlp12s0
+wifi_ssid: ""
+wifi_psk: ""  # plaintext passphrase; wpa_passphrase will hash it
+
+
