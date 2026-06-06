@@ -31,7 +31,8 @@
     cmd: wpa_passphrase "{{ wifi_ssid }}" "{{ wifi_psk }}"
   register: wpa_passphrase_output
   changed_when: false
-  # no_log: true  # avoid logging the passphrase in plaintext
+  check_mode: no 
+  no_log: true  # avoid logging the passphrase in plaintext
 
 - name: Extract psk hash from wpa_passphrase output
   set_fact:
@@ -39,7 +40,8 @@
       {{ wpa_passphrase_output.stdout_lines
          | select('match', '^\s+psk=[0-9a-f]{64}')
          | first
-         | regex_replace('^\s+psk=', '') }}
+         | regex_replace('^\s+psk=', '') | trim }}  
+  no_log: true  # avoid logging the PSK hash
 
 # Step 2c: Deploy wpa_supplicant config for the interface
 - name: Deploy wpa_supplicant configuration
@@ -82,25 +84,55 @@
       Interface '{{ wifi_interface }}' does not have an IPv4 address assigned.
     quiet: true
 
-- name: Verify DNS resolution is configured
-  command:
-    cmd: cat /etc/resolv.conf
-  register: resolv_conf
-  changed_when: false
-  failed_when: "'nameserver' not in resolv_conf.stdout"
+- name: Read DNS configuration from resolv.conf
+  slurp:
+    src: /etc/resolv.conf
+  register: resolv_conf_file
+  # ignore_errors: true
 
-- name: Verify internet connectivity
-  command:
-    cmd: ping -c 4 google.com
-  register: ping_result
+- name: Extract configured nameservers
+  ansible.builtin.set_fact:
+    dns_servers: >-
+      {{
+        (resolv_conf_file.content | b64decode).splitlines()
+        | select('match', '^nameserver')
+        | map('regex_replace', '^nameserver\\s+', '')
+        | list
+      }}
+
+- name: Verify at least one DNS server configured
+  ansible.builtin.assert:
+    that:
+      - dns_servers | length > 0
+    fail_msg: "No nameservers configured in /etc/resolv.conf"
+    success_msg: "DNS servers found: {{ dns_servers | join(', ') }}"
+
+- name: Verify DNS resolution works
+  ansible.builtin.command:
+    argv:
+      - getent
+      - hosts
+      - google.com
+  register: dns_lookup
+  check_mode: no 
   changed_when: false
-  failed_when: ping_result.rc != 0
+
+- name: Test internet connectivity
+  wait_for:
+    host: 8.8.8.8
+    port: 53
+    timeout: 5
+    delay: 1
+  register: connectivity_test
+  check_mode: no 
+  ignore_errors: true
 
 - name: Display connectivity report
   ansible.builtin.debug:
-    msg: |
-      === WiFi Connectivity Report ===
-      Interface : {{ wifi_interface }}
-      IP Address: {{ ansible_facts[wifi_interface].ipv4.address | default('N/A') }}
-      DNS       : {{ resolv_conf.stdout | regex_findall('^nameserver\\s+(\\S+)', multiline=true) | join(', ') }}
-      Ping Test : SUCCESS (google.com reachable)
+    msg:
+      - "=== Network Connectivity Report ==="
+      - "Interface             : {{ wifi_interface }}"
+      - "IP Address            : {{ ansible_facts[wifi_interface].ipv4.address | default('N/A') }}"
+      - "DNS Servers           : {{ dns_servers | join(', ') if dns_servers else 'None configured' }}"
+      - "DNS Resolution        : {{ 'SUCCESS' if dns_lookup.rc == 0 else 'FAILED' }}"
+      - "Internet Connectivity : {{ 'SUCCESS (8.8.8.8:53 reachable)' if connectivity_test is succeeded else 'FAILED' }}"
